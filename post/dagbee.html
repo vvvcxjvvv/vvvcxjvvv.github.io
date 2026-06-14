@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DagBee — chanchan</title>
+  <meta name="description" content="A lightweight, production-ready DAG execution framework for Go">
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><span class="accent">~</span>/chanchan</a>
+      <ul class="nav-links">
+        <li><a href="/">Posts</a></li>
+        <li><a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Post Content -->
+  <main class="container post-page">
+    <header class="post-header">
+      <div class="post-meta">
+        <span>2025-06</span>
+        <span class="sep">|</span>
+        <span>Go · DAG · Framework</span>
+      </div>
+      <h1 class="post-page-title">DagBee</h1>
+    </header>
+
+    <article class="article">
+
+      <p>A lightweight, production-ready DAG (Directed Acyclic Graph) execution framework for Go. Designed to be embedded in latency-sensitive microservices such as recommendation engines — no external scheduler, no infrastructure dependencies.</p>
+
+      <h2>Features</h2>
+
+      <ul>
+        <li><strong>Parallel + serial mixed execution</strong> — nodes with no dependency run concurrently; dependent nodes run in order</li>
+        <li><strong>Concurrency control</strong> — configurable max parallelism via semaphore</li>
+        <li><strong>Priority scheduling</strong> — ready nodes are dispatched by priority (higher = first)</li>
+        <li><strong>Per-node timeout & retry</strong> — independent timeout, retry count, and backoff strategy (fixed / exponential) per node</li>
+        <li><strong>Failure strategies</strong> — critical nodes abort the DAG; non-critical nodes degrade gracefully</li>
+        <li><strong>Fallback functions</strong> — provide default data when a node fails</li>
+        <li><strong>Panic recovery</strong> — a panicking node never crashes the process</li>
+        <li><strong>Graceful shutdown</strong> — context cancellation stops scheduling and waits for running nodes</li>
+        <li><strong>SharedStore</strong> — concurrency-safe key-value store for passing data between nodes, with generics support</li>
+        <li><strong>Lifecycle hooks</strong> — BeforeNode / AfterNode / OnNodeSkip / OnDAGComplete</li>
+        <li><strong>Logger interface</strong> — plug in zap, logrus, or any structured logger</li>
+        <li><strong>YAML configuration</strong> — declare topology and node settings in YAML; register functions in Go</li>
+        <li><strong>Conditional execution</strong> — skip nodes based on runtime predicates</li>
+        <li><strong>Visualization</strong> — text-based topological layer output for debugging</li>
+        <li><strong>Object pooling</strong> — <code>sync.Pool</code> reuse of DagResult / NodeResult to reduce GC pressure</li>
+        <li><strong>Near-zero framework overhead</strong> — ~7μs to build a 20-node DAG, ~1.3μs scheduling per node, ~360B memory per node</li>
+      </ul>
+
+      <h2>Installation</h2>
+
+      <pre><code>go get github.com/vvvcxjvvv/DagBee@latest<span class="lang-label">bash</span></code></pre>
+
+      <h2>Quick Start</h2>
+
+      <pre><code>package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/vvvcxjvvv/DagBee"
+)
+
+func main() {
+    d := dagbee.NewDAG("example",
+        dagbee.WithMaxConcurrency(4),
+        dagbee.WithTimeout(5*time.Second),
+    )
+
+    d.AddNode("A", func(ctx context.Context, s *dagbee.SharedStore) error {
+        s.Set("greeting", "hello")
+        return nil
+    }, dagbee.NodeWithPriority(10))
+
+    d.AddNode("B", func(ctx context.Context, s *dagbee.SharedStore) error {
+        s.Set("name", "world")
+        return nil
+    }, dagbee.NodeWithPriority(5))
+
+    d.AddNode("C", func(ctx context.Context, s *dagbee.SharedStore) error {
+        g, _ := dagbee.GetTyped[string](s, "greeting")
+        n, _ := dagbee.GetTyped[string](s, "name")
+        fmt.Printf("%s, %s!\n", g, n)
+        return nil
+    },
+        dagbee.NodeWithDependsOn("A", "B"),
+        dagbee.NodeWithTimeout(200*time.Millisecond),
+    )
+
+    result := dagbee.NewEngine().Run(context.Background(), d)
+    fmt.Println("Status:", result.Status) // Success
+}<span class="lang-label">go</span></code></pre>
+
+      <h2>YAML Configuration</h2>
+
+      <p>Define the topology in YAML, register the Go functions separately:</p>
+
+      <pre><code># examples/recommend/pipeline.yaml
+dag:
+  name: "recommend-pipeline"
+  max_concurrency: 8
+  timeout: 5s
+  nodes:
+    - name: "recall_cf"
+      timeout: 200ms
+      retry: { count: 2, interval: 50ms, strategy: "fixed" }
+      critical: true
+      priority: 10
+      depends_on: []
+    - name: "merge_and_rank"
+      timeout: 500ms
+      critical: true
+      depends_on: ["recall_cf"]<span class="lang-label">yaml</span></code></pre>
+
+      <pre><code>registry := map[string]dagbee.NodeFunc{
+    "recall_cf":      myRecallCF,
+    "merge_and_rank": myMergeAndRank,
+}
+d, err := dagbee.LoadDAGFromYAML("examples/recommend/pipeline.yaml", registry)<span class="lang-label">go</span></code></pre>
+
+      <h2>Node Options</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>NodeWithTimeout(d)</code></td>
+            <td>Per-attempt execution timeout</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithRetry(count, interval)</code></td>
+            <td>Retry count and base interval</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithRetryStrategy(s)</code></td>
+            <td><code>RetryFixed</code> or <code>RetryExponential</code></td>
+          </tr>
+          <tr>
+            <td><code>NodeWithCritical(bool)</code></td>
+            <td><code>true</code> = abort DAG on failure; <code>false</code> = degrade</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithPriority(int)</code></td>
+            <td>Scheduling priority (higher = first)</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithFallback(fn)</code></td>
+            <td>Fallback function when all retries fail</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithDependsOn(names...)</code></td>
+            <td>Upstream dependency declarations</td>
+          </tr>
+          <tr>
+            <td><code>NodeWithCondition(fn)</code></td>
+            <td>Predicate gate — skip when false</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>DAG Options</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Option</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>WithMaxConcurrency(n)</code></td>
+            <td>Max parallel goroutines (default: NumCPU)</td>
+          </tr>
+          <tr>
+            <td><code>WithTimeout(d)</code></td>
+            <td>Overall DAG execution timeout</td>
+          </tr>
+          <tr>
+            <td><code>WithHook(h)</code></td>
+            <td>Register a lifecycle hook</td>
+          </tr>
+          <tr>
+            <td><code>WithLogger(l)</code></td>
+            <td>Inject a custom Logger</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Architecture</h2>
+
+      <pre><code>    User Layer       Core Layer            Engine Layer            Data Layer
+    ┌──────────┐    ┌──────────────┐      ┌───────────────┐      ┌─────────────┐
+    │ Go API   │───►│ DAG          │─────►│ Engine        │─────►│ SharedStore │
+    │ YAML Cfg │    │ Node         │      │ Scheduler     │      │ DagResult   │
+    └──────────┘    │ Validator    │      │ Executor      │      │ Hooks       │
+                    └──────────────┘      └───────────────┘      │ Logger      │
+                                                                 └─────────────┘<span class="lang-label">text</span></code></pre>
+
+      <h2>Running Tests</h2>
+
+      <pre><code>go test -v -race ./...            # unit + integration tests
+go test -bench=. -benchmem ./...  # benchmarks<span class="lang-label">bash</span></code></pre>
+
+      <h2>Pressure Benchmarks</h2>
+
+      <pre><code>go test -run '^$' -bench 'BenchmarkEngineRun_(WideDAG|DeepDAG|FanOutFanIn|RetryAmplification|ParallelRequests)$' -benchmem ./...
+go test -run '^$' -bench 'BenchmarkSharedStore_HotKeyContention$' -benchmem ./...
+go test -run '^$' -bench 'BenchmarkEngineRun_ParallelRequests$' -benchmem -cpuprofile cpu.out -memprofile mem.out ./...<span class="lang-label">bash</span></code></pre>
+
+      <p>Scenarios included:</p>
+
+      <ul>
+        <li><code>BenchmarkEngineRun_WideDAG</code>: wide DAG scheduling overhead and burst parallelism</li>
+        <li><code>BenchmarkEngineRun_DeepDAG</code>: long dependency-chain scheduling overhead</li>
+        <li><code>BenchmarkEngineRun_FanOutFanIn</code>: fan-out/fan-in merge pressure</li>
+        <li><code>BenchmarkEngineRun_RetryAmplification</code>: retry-driven load amplification</li>
+        <li><code>BenchmarkEngineRun_ParallelRequests</code>: many concurrent requests, each running one DAG</li>
+        <li><code>BenchmarkSharedStore_HotKeyContention</code>: <code>SharedStore</code> hot-key lock contention</li>
+      </ul>
+
+      <h2>Project Structure</h2>
+
+      <pre><code>dagbee/
+│
+│── Core ─────────────────────────────────────────────
+├── dag.go              DAG definition, node registration, cycle detection
+├── node.go             Node type, NodeFunc signature, NodeOption
+│
+│── Engine ───────────────────────────────────────────
+├── engine.go           Execution engine: scheduling, retry, fallback
+├── scheduler.go        Priority-based ready-queue (container/heap)
+│
+│── Data ─────────────────────────────────────────────
+├── store.go            SharedStore: concurrent key-value store
+├── result.go           NodeResult / DagResult + sync.Pool
+│
+│── Support ──────────────────────────────────────────
+├── config.go           YAML configuration parser
+├── options.go          Functional options (DAGOption, EngineOption)
+├── hook.go             Hook interface + HookChain
+├── errors.go           Sentinel errors + PanicError
+├── logger.go           Logger interface + StdLogger
+├── visualize.go        Text-based DAG topology visualization
+├── doc.go              Package documentation &amp; file organization guide
+│
+│── Tests ────────────────────────────────────────────
+├── dag_test.go         DAG construction, cycle detection tests
+├── engine_test.go      Engine scheduling, concurrency, fault tolerance tests
+├── store_test.go       SharedStore concurrency safety tests
+├── benchmark_test.go   Performance benchmarks
+│
+│── Examples &amp; Docs ──────────────────────────────────
+├── examples/
+│   ├── simple/         Minimal 3-node example
+│   └── recommend/      Full recommendation pipeline with YAML config
+│       ├── main.go
+│       └── pipeline.yaml
+├── docs/
+│   ├── design-prompt.md
+│   └── dag-frameworks-research.md
+│
+├── go.mod
+├── go.sum
+└── README.md<span class="lang-label">text</span></code></pre>
+
+      <h2>License</h2>
+
+      <p>MIT</p>
+
+      <hr>
+
+      <a href="/" class="back-link">&larr; back to posts</a>
+      <span style="margin-left: 16px;"><a href="https://github.com/vvvcxjvvv/DagBee" target="_blank" rel="noopener" class="back-link">View on GitHub &rarr;</a></span>
+
+    </article>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <span>&copy; 2025 chanchan</span>
+      <a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">github.com/vvvcxjvvv</a>
+    </div>
+  </footer>
+
+</body>
+</html>
