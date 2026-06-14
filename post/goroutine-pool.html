@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GoRoutinePool — chanchan</title>
+  <meta name="description" content="一个基于 Go 的轻量级协程池实现">
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><span class="accent">~</span>/chanchan</a>
+      <ul class="nav-links">
+        <li><a href="/">Posts</a></li>
+        <li><a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Post Content -->
+  <main class="container post-page">
+    <header class="post-header">
+      <div class="post-meta">
+        <span>2025-06</span>
+        <span class="sep">|</span>
+        <span>Go · Concurrency · Pool</span>
+      </div>
+      <h1 class="post-page-title">GoRoutinePool</h1>
+    </header>
+
+    <article class="article">
+
+      <p>一个基于 Go 的轻量级协程池实现，通过预创建固定数量的 Worker 协程并复用，避免频繁创建/销毁 goroutine 带来的调度开销，同时有效控制并发数量。</p>
+
+      <h2>特性</h2>
+
+      <ul>
+        <li><strong>固定 Worker 数量</strong> — 预创建指定数量的工作协程，任务在 Worker 间轮转复用</li>
+        <li><strong>任务队列缓冲</strong> — 支持带缓冲的任务队列，队列满时 Submit 超时返回错误</li>
+        <li><strong>结果通道回调</strong> — 每个 Task 携带独立的 Result channel，支持异步获取执行结果</li>
+        <li><strong>Panic 恢复</strong> — Worker 内置 recover，单个任务 panic 不会拖垮整个池</li>
+        <li><strong>优雅关闭</strong> — Stop 依次关闭任务提交、分发通道、Worker 协程，确保已提交任务执行完毕</li>
+        <li><strong>并发安全</strong> — 使用 sync.Mutex、sync.Once、atomic 保证状态操作的线程安全</li>
+      </ul>
+
+      <h2>快速开始</h2>
+
+      <h3>安装</h3>
+
+      <pre><code>go get github.com/yourname/GoRoutinePool<span class="lang-label">bash</span></code></pre>
+
+      <h3>基本用法</h3>
+
+      <pre><code>package main
+
+import (
+    "fmt"
+    "strconv"
+    goroutine_pool "github.com/yourname/GoRoutinePool"
+)
+
+func main() {
+    // 创建协程池：4 个 Worker，任务队列缓冲 10
+    pool := goroutine_pool.NewPool(4, 10)
+    pool.Start()
+
+    // 定义任务函数
+    greet := func(args ...interface{}) interface{} {
+        name := args[0].(string)
+        return "Hello, " + name + "!"
+    }
+
+    // 构造并提交任务
+    task := goroutine_pool.Task{
+        Execute: greet,
+        Args:    []interface{}{"chanchan"},
+        Result:  make(chan interface{}, 1),
+    }
+
+    if err := pool.Submit(task); err != nil {
+        fmt.Println("submit failed:", err)
+        return
+    }
+
+    // 从 Result channel 获取结果
+    result := <-task.Result
+    fmt.Println(result) // Hello, chanchan!
+
+    // 关闭协程池
+    pool.Stop()
+}<span class="lang-label">go</span></code></pre>
+
+      <h2>API</h2>
+
+      <h3><code>NewPool(maxWorkerNum, maxQueueSize uint32) *Pool</code></h3>
+
+      <p>创建协程池。<code>maxWorkerNum</code> 为 Worker 数量，<code>maxQueueSize</code> 为任务队列缓冲大小。</p>
+
+      <h3><code>pool.Start()</code></h3>
+
+      <p>启动协程池，开始从任务队列中取出任务分派给空闲 Worker。</p>
+
+      <h3><code>pool.Submit(task Task) error</code></h3>
+
+      <p>提交任务。若队列满，最多阻塞 1 秒后返回 <code>ErrQueueFull</code>；池已关闭则返回 <code>ErrPoolClosed</code>。</p>
+
+      <h3><code>pool.Stop()</code></h3>
+
+      <p>优雅关闭。先拒绝新任务提交，再等待已提交任务执行完毕，最后回收所有 Worker。可安全多次调用（内部 <code>sync.Once</code> 保证只执行一次）。</p>
+
+      <h3><code>Task</code> 结构体</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>类型</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Execute</code></td>
+            <td><code>func(args ...interface{}) interface{}</code></td>
+            <td>任务执行函数</td>
+          </tr>
+          <tr>
+            <td><code>Args</code></td>
+            <td><code>[]interface{}</code></td>
+            <td>传递给 Execute 的参数</td>
+          </tr>
+          <tr>
+            <td><code>Result</code></td>
+            <td><code>chan interface{}</code></td>
+            <td>结果通道，任务完成后写入并关闭</td>
+          </tr>
+          <tr>
+            <td><code>Completed</code></td>
+            <td><code>bool</code></td>
+            <td>任务是否执行完成</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>错误</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>错误</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ErrQueueFull</code></td>
+            <td>任务队列已满，Submit 超时</td>
+          </tr>
+          <tr>
+            <td><code>ErrPoolClosed</code></td>
+            <td>协程池已关闭，拒绝提交</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>架构</h2>
+
+      <pre><code>            Submit(task)
+                │
+                ▼
+          ┌───────────┐
+          │ taskChan   │  ◄── 带缓冲任务队列
+          └─────┬─────┘
+                │  Start() 分派
+    ┌───────────┼───────────┐
+    ▼           ▼           ▼
+┌─────────┐ ┌─────────┐ ┌─────────┐
+│ Worker1 │ │ Worker2 │ │ WorkerN  │   ◄── 固定数量
+└─────────┘ └─────────┘ └─────────┘
+    │           │           │
+    ▼           ▼           ▼
+task.Result  task.Result  task.Result   ◄── 调用方读取<span class="lang-label">text</span></code></pre>
+
+      <p><strong>工作流程：</strong></p>
+
+      <ol>
+        <li><code>NewPool</code> 创建指定数量的 Worker，每个 Worker 启动一个 goroutine 等待任务</li>
+        <li>空闲 Worker 放入 <code>idleWorkers</code> channel</li>
+        <li><code>Submit</code> 将任务写入 <code>taskChan</code></li>
+        <li><code>Start</code> 协程从 <code>taskChan</code> 取任务，从 <code>idleWorkers</code> 取空闲 Worker，分派任务</li>
+        <li>Worker 执行完毕后将自身放回 <code>idleWorkers</code>，任务结果写入 <code>Result</code> channel</li>
+        <li><code>Stop</code> 关闭 <code>taskChan</code> → 关闭 <code>stopChan</code> 通知 Worker 退出 → <code>wg.Wait()</code> 等待全部完成</li>
+      </ol>
+
+      <h2>关闭顺序</h2>
+
+      <p><code>Stop()</code> 的关闭逻辑保证了已提交任务不会丢失：</p>
+
+      <ol>
+        <li><code>isStopped = true</code> — 拒绝新的 Submit</li>
+        <li><code>close(taskChan)</code> — 不再接收新任务，Start 将队列中剩余任务分派完毕后退出</li>
+        <li><code>close(stopChan)</code> — 通知所有 Worker 停止等待</li>
+        <li><code>wg.Wait()</code> — 等待所有 Worker 执行完当前任务</li>
+        <li><code>close(idleWorkers)</code> — 清理空闲队列</li>
+      </ol>
+
+      <h2>运行测试</h2>
+
+      <pre><code>go test -v ./...<span class="lang-label">bash</span></code></pre>
+
+      <h2>License</h2>
+
+      <p>MIT</p>
+
+      <hr>
+
+      <a href="/" class="back-link">&larr; back to posts</a>
+      <span style="margin-left: 16px;"><a href="https://github.com/vvvcxjvvv/GoRoutinePool" target="_blank" rel="noopener" class="back-link">View on GitHub &rarr;</a></span>
+
+    </article>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <span>&copy; 2025 chanchan</span>
+      <a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">github.com/vvvcxjvvv</a>
+    </div>
+  </footer>
+
+</body>
+</html>
