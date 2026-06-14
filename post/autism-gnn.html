@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diagnosis of Autism based on Graph Neural Networks — chanchan</title>
+  <meta name="description" content="基于图神经网络的孤独症谱系障碍诊断分类研究">
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><span class="accent">~</span>/chanchan</a>
+      <ul class="nav-links">
+        <li><a href="/">Posts</a></li>
+        <li><a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Post Content -->
+  <main class="container post-page">
+    <header class="post-header">
+      <div class="post-meta">
+        <span>2025-06</span>
+        <span class="sep">|</span>
+        <span>GNN · fMRI · ASD</span>
+      </div>
+      <h1 class="post-page-title">Diagnosis of Autism based on Graph Neural Networks</h1>
+    </header>
+
+    <article class="article">
+
+      <p>基于图神经网络的孤独症谱系障碍（ASD）诊断分类研究。利用 ABIDE 数据集中的 fMRI 脑功能连接特征，结合被试表型信息构建人群图，采用 Chebyshev 多项式近似 GCN 和自注意力增强的 GAT 模型进行二分类（ASD vs 健康对照）。</p>
+
+      <h2>核心原理</h2>
+
+      <h3>核心思想</h3>
+
+      <p>将每个被试视为图中的一个节点，特征为 fMRI 功能连接向量，边由表型亲和图与高斯核距离图的逐元素乘积决定，然后用 GNN 进行节点分类。</p>
+
+      <h3>图构建</h3>
+
+      <ol>
+        <li><strong>表型亲和图</strong>：基于 SEX 和 SITE_ID 构建二值邻接矩阵（同性别 + 同站点 = 1）</li>
+        <li><strong>高斯核距离图</strong>：基于特征的相关性距离 + 高斯核函数</li>
+        <li><strong>最终邻接矩阵</strong> = 表型亲和图 ⊙ 高斯核距离图（逐元素相乘）</li>
+        <li><strong>Chebyshev 多项式展开</strong>：4 阶多项式近似，生成 4 个稀疏支持矩阵</li>
+      </ol>
+
+      <h3>特征工程</h3>
+
+      <ol>
+        <li>从 <code>_ho_correlation.mat</code> 加载功能连接矩阵</li>
+        <li>Fisher z 变换（<code>arctanh</code>）后提取上三角元素</li>
+        <li>删除全零列</li>
+        <li>RidgeClassifier + RFE 特征选择至 2000 维</li>
+        <li>行归一化</li>
+      </ol>
+
+      <h3>模型变体</h3>
+
+      <h4>GCN</h4>
+
+      <pre><code>Input(613 × 2000)
+  → GraphConvolution(2000, 256) + ReLU + Dropout(0.3)
+  → GraphConvolution(256, 96)
+  → MLP: 96 → 64 → 16 → 2<span class="lang-label">text</span></code></pre>
+
+      <h4>GAT（自注意力增强）</h4>
+
+      <pre><code>Input(613 × 2000)
+  → GraphConvolution(2000, 256) + ReLU + Dropout(0.3)
+  → Attention(scaled_dot_product) + Squeeze
+  → GraphConvolution(256, 96)
+  → MLP: 96 → 64 → 16 → 2<span class="lang-label">text</span></code></pre>
+
+      <h4>CAMV_GCN / CAMV_GAT</h4>
+
+      <p>组合多注意力视图架构（设计但未完全启用）。设计了双视图（FC + HOFC）架构，当前仅启用 FC 单视图分支。</p>
+
+      <h3>注意力机制</h3>
+
+      <p><code>models/attention.py</code> 提供了 4 种评分函数：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>函数</th>
+            <th>说明</th>
+            <th>Accuracy</th>
+            <th>AUC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>dot_product</code></td>
+            <td>点积注意力</td>
+            <td>—</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><code>scaled_dot_product</code></td>
+            <td>缩放点积注意力（最终选用）</td>
+            <td><strong>74.80%</strong></td>
+            <td><strong>78.12%</strong></td>
+          </tr>
+          <tr>
+            <td><code>mlp</code></td>
+            <td>MLP 注意力（concat 方式）</td>
+            <td>72.36%</td>
+            <td>76.58%</td>
+          </tr>
+          <tr>
+            <td><code>bi_linear</code></td>
+            <td>双线性注意力（general dot 方式）</td>
+            <td>73.98%</td>
+            <td>76.66%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>项目结构</h2>
+
+      <pre><code>.
+├── config.py                               # 超参数配置（argparse）
+├── train.py                                # 主训练脚本（CAMV_GCN）
+├── train_gat.py                            # GAT 变体训练脚本（CAMV_GAT）
+├── train_final_baseline.py                 # 带 TensorBoard 的 baseline 训练
+├── train_GAT_demo.py                       # 标准 GAT 训练 demo
+├── modelTest.py                            # 加载预训练模型逐样本预测
+├── test.py                                 # GAT 模型测试
+├── visualize.py                            # 可视化对比脚本
+├── models/                                 # 模型定义
+│   ├── gcn.py                              # GCN, GAT, CAMV_GCN, CAMV_GAT
+│   ├── gat.py                              # 标准 GAT 独立实现（Dense / Sparse）
+│   ├── layers.py                           # 图卷积层（Chebyshev 多项式近似）
+│   ├── attention.py                        # 多头自注意力模块（4 种评分函数）
+│   └── graph_attention_layer.py            # GAT 注意力层（含自定义稀疏反向传播）
+├── parsers/                                # 数据解析
+│   ├── abide_parser.py                     # 基础数据解析器
+│   └── abide_parser_hofc.py               # 增强版数据解析器（多特征选择策略）
+├── utils/                                  # 工具函数
+│   └── metrics.py                          # 预处理、损失函数、评估指标
+├── data/                                   # 数据目录
+│   └── ABIDE_pcp/                          # ABIDE 预处理数据
+└── checkpoints/                           # 模型权重保存目录<span class="lang-label">text</span></code></pre>
+
+      <h2>数据</h2>
+
+      <p>本项目使用 <a href="http://fcon_1000.projects.nitrc.org/indi/abide/" target="_blank" rel="noopener">ABIDE（Autism Brain Imaging Data Exchange）</a>数据集，预处理管道为 C-PAC，配置为带通滤波、无全局信号回归（<code>filt_noglobal</code>）。</p>
+
+      <ul>
+        <li><strong>被试数量</strong>：871 人（筛选后 613 人，年龄 ≤ 18）</li>
+        <li><strong>脑区划分</strong>：Harvard-Oxford atlas（111 个 ROI）</li>
+        <li><strong>特征来源</strong>：ROI 时间序列 → 功能连接矩阵（correlation）→ Fisher z 变换 → 上三角提取</li>
+        <li><strong>表型信息</strong>：DX_GROUP（诊断标签）、SEX（性别）、SITE_ID（采集站点）、AGE_AT_SCAN（年龄）、FIQ（智商）</li>
+      </ul>
+
+      <h2>使用方法</h2>
+
+      <h3>训练</h3>
+
+      <pre><code># 训练 CAMV_GCN
+python train.py
+
+# 训练 CAMV_GAT
+python train_gat.py
+
+# 带 TensorBoard 的 baseline 训练
+python train_final_baseline.py
+
+# 标准 GAT demo
+python train_GAT_demo.py<span class="lang-label">bash</span></code></pre>
+
+      <h3>测试</h3>
+
+      <pre><code># 加载预训练模型，逐样本预测
+python modelTest.py
+
+# GAT 模型测试
+python test.py<span class="lang-label">bash</span></code></pre>
+
+      <h3>超参数</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>参数</th>
+            <th>默认值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>--learning_rate</code></td>
+            <td>0.003</td>
+            <td>学习率</td>
+          </tr>
+          <tr>
+            <td><code>--epochs</code></td>
+            <td>100</td>
+            <td>训练轮数</td>
+          </tr>
+          <tr>
+            <td><code>--hidden</code></td>
+            <td>16</td>
+            <td>隐藏层维度</td>
+          </tr>
+          <tr>
+            <td><code>--dropout</code></td>
+            <td>0.3</td>
+            <td>Dropout 率</td>
+          </tr>
+          <tr>
+            <td><code>--weight_decay</code></td>
+            <td>5e-4</td>
+            <td>权重衰减</td>
+          </tr>
+          <tr>
+            <td><code>--embed_dim</code></td>
+            <td>256</td>
+            <td>嵌入维度</td>
+          </tr>
+          <tr>
+            <td><code>--hidden_dim</code></td>
+            <td>256</td>
+            <td>注意力隐藏维度</td>
+          </tr>
+          <tr>
+            <td><code>--head</code></td>
+            <td>1</td>
+            <td>注意力头数</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>License</h2>
+
+      <p>数据解析模块 <code>parsers/abide_parser.py</code> 遵循 GPLv3 许可证（原作者 Sarah Parisot / Sofia Ira Ktena）。其余代码请参考项目仓库的许可证声明。</p>
+
+      <hr>
+
+      <a href="/" class="back-link">&larr; back to posts</a>
+      <span style="margin-left: 16px;"><a href="https://github.com/vvvcxjvvv/Diagnosis-of-Autism-based-on-Graph-Neural-Networks" target="_blank" rel="noopener" class="back-link">View on GitHub &rarr;</a></span>
+
+    </article>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <span>&copy; 2025 chanchan</span>
+      <a href="https://github.com/vvvcxjvvv" target="_blank" rel="noopener">github.com/vvvcxjvvv</a>
+    </div>
+  </footer>
+
+</body>
+</html>
